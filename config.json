@@ -1,0 +1,7 @@
+{
+  "threadCount": 4,
+  "txnCount": 10,
+  "blocks": 1,
+  "scheduler": "parallel",
+  "mode": "production"
+}
