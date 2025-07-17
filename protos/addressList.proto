@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package addressList;
+
+// Message representing a single address-value pair
+message AddressValue {
+  string address = 1; // e.g., State address, etc.
+  string value = 2;   // Value associated with the address
+}
+
+// A container message for multiple pairs
+message AddressValueList {
+  repeated AddressValue pairs = 1;
+}

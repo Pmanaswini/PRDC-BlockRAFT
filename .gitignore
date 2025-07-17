@@ -1,0 +1,10 @@
+# Ignore binary files
+*.exe
+*.pb.cc
+*.pb.h
+*.out
+*.bin
+*.o
+*.class
+*.so
+build/

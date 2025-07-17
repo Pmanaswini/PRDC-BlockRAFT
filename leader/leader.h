@@ -234,26 +234,30 @@ class leader {
 
     return updatedKeys;
   }
-  void saveData(const std::string& path, int clusterSize) {
+
+
+void saveData(const std::string& path, int clusterSize) {
     std::vector<std::thread> threads;
     GlobalState state;
     std::vector<std::string> results(clusterSize);
+
     for (int i = 0; i < clusterSize; ++i) {
-      threads.emplace_back(
-          [&, i]() { results[i] = fetchAndParseKeys(path, i, state); });
+        threads.emplace_back(
+            [&, i]() { results[i] = fetchAndParseKeys(path, i, state); });
     }
 
     for (auto& t : threads) {
-      t.join();
+        t.join();
     }
 
     std::string allUpdatedKeys;
     for (const auto& result : results) {
-      allUpdatedKeys += result;
+        allUpdatedKeys += result;
     }
 
+    // Update the global state tree
     state.updateTree(allUpdatedKeys);
-  }
+}
 
   bool leaderProtocol(string raftTerm, int txnCount, int thCount, string mode,
                       int count) {
