@@ -277,7 +277,7 @@ void saveData(const std::string& path, int clusterSize) {
     if (count % 2 == 0) {
       BOOST_LOG_TRIVIAL(info) << "Setup File is running (even count)." << count;
       latestBlock =
-      producer.produce(db, txnCount, "../leader/testFile.txt");
+      producer.produce(db, txnCount, "../leader/setupFile.txt");
     } else {
       BOOST_LOG_TRIVIAL(info) << "Test File is running (odd count)." << count;
       latestBlock =
