@@ -18,7 +18,10 @@ class eCommClient {
  private:
   transaction::Transaction transaction;
   transaction::TransactionHeader transactionHeader;
-
+  rocksdb::DB* state;
+  rocksdb::Options options;
+  rocksdb::Status status =
+      rocksdb::DB::OpenForReadOnly(options, "globalState", &state);
   struct Node {
     string value;
     string hash;
@@ -37,46 +40,22 @@ class eCommClient {
     }
     return {first, second};
   }
+  string getValue(const string& key) {
+    string keyHash = computeHash(key);
+    Node node = getNode(keyHash);
+    return node.value;
+  }
+  
+  Node getNode(const string& key) {
+    string data;
+    Node node = {"", "", {}};
+    rocksdb::Status status = state->Get(rocksdb::ReadOptions(), key, &data);
+    if (status.ok()) return deserializeNode(data);
+    return node;
+  }
 
  public:
-  rocksdb::DB* db;
-  rocksdb::Options options;
-  rocksdb::Status status =
-      rocksdb::DB::OpenForReadOnly(options, "globalState", &db);
-
-  string sendTransactionToRestAPI(const std::string& serializedTransaction) {
-    CURL* curl;
-    CURLcode res;
-    string result;
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-    curl = curl_easy_init();
-    if (curl) {
-      struct curl_slist* headers = nullptr;
-      headers =
-          curl_slist_append(headers, "Content-Type:application/octet-stream");
-
-      curl_easy_setopt(curl, CURLOPT_URL,
-                       "http://localhost:18080/api/transaction");
-      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-      curl_easy_setopt(curl, CURLOPT_POSTFIELDS, serializedTransaction.c_str());
-      curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE,
-                       serializedTransaction.size());
-
-      res = curl_easy_perform(curl);
-      if (res != CURLE_OK) {
-        cerr << "curl_easy_perform() failed: " << curl_easy_strerror(res)
-             << endl;
-        result = "curl_easy_perform() failed";
-      } else {
-        result = "Transaction successfully sent to REST API.";
-      }
-
-      curl_easy_cleanup(curl);
-      curl_slist_free_all(headers);
-    }
-    curl_global_cleanup();
-    return result;
-  }
+  
 
   string computeHash(const string& input) {
     EVP_MD_CTX* mdctx;
@@ -121,24 +100,8 @@ class eCommClient {
     return node;
   }
 
-  string getValue(const string& key) {
-    string keyHash = computeHash(key);
-    Node node = getNode(keyHash);
-    return node.value;
-  }
 
-  Node getNode(const string& key) {
-    string data;
-    Node node = {"", "", {}};
-    rocksdb::Status status = db->Get(rocksdb::ReadOptions(), key, &data);
-    if (status.ok()) return deserializeNode(data);
-    return node;
-  }
-
-  string processCommand(const vector<string>& commands) {
-    if (commands.size() < 2 || commands.size() > 4) {
-      return "Error: Number of arguments wrong";
-    }
+  transaction::Transaction processCommand(const vector<string>& commands) {
 
     transactionHeader.set_family_name("eComm");
     transactionHeader.set_client_id(commands[1]);
@@ -177,7 +140,6 @@ class eCommClient {
       transactionHeader.add_outputs(addr1);
       if (cart.empty()) {
         cout << "Cart is empty" << endl;
-        return "empty cart";
       }
 
       auto result = splitString(cart);
@@ -198,43 +160,17 @@ class eCommClient {
                               addr1 + "\", \"Value\": \"" + commands[2] +
                               "\"}");
 
-    } else if (command == "viewCart") {
-      string addr1 = "eComm" + commands[1] + "Cart";
-      string cart = getValue(addr1);
-      if (cart.empty()) {
-        cout << "Cart is empty" << endl;
-        return "empty cart";
-      }
-
-      auto result = splitString(cart);
-      cout << "The contents of the cart are " << endl;
-      for (size_t i = 0; i < result.first.size(); ++i) {
-        cout << result.first[i] << ":  " << result.second[i] << endl;
-      }
-      return cart;
-
     } else {
-      return "Error: Invalid command.\n Available commands:\n"
-             "  addToCart <client_id> <item_id> <quantity>\n"
-             "  removeFromCart <client_id> <item_id> <quantity>\n"
-             "  viewCart <client_id>\n"
-             "  checkout <client_id>\n"
-             "  refillItem <item_id> <quantity>";
+      std::cerr << "transaction not found";
     }
 
     string serializedHeader;
     if (!transactionHeader.SerializeToString(&serializedHeader)) {
-      return "Failed to serialize TransactionHeader";
+      std::cerr << "transaction not found";
     }
 
     transaction.set_header(serializedHeader);
     transaction.add_dependencies("");
-
-    string serializedTransaction;
-    if (!transaction.SerializeToString(&serializedTransaction)) {
-      return "Failed to serialize Transaction";
-    }
-
-    return sendTransactionToRestAPI(serializedTransaction);
+    return transaction;
   }
 };

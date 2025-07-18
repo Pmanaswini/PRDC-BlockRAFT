@@ -27,43 +27,7 @@ class NFTClient {
   };
 
  public:
-  rocksdb::DB* db;
-  rocksdb::Options options;
-  rocksdb::Status status =
-      rocksdb::DB::OpenForReadOnly(options, "globalState", &db);
-
-  string sendTransactionToRestAPI(const std::string& serializedTransaction) {
-    CURL* curl;
-    CURLcode res;
-    string result;
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-    curl = curl_easy_init();
-    if (curl) {
-      struct curl_slist* headers = nullptr;
-      headers =
-          curl_slist_append(headers, "Content-Type:application/octet-stream");
-
-      curl_easy_setopt(curl, CURLOPT_URL,
-                       "http://localhost:18080/api/transaction");
-      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-      curl_easy_setopt(curl, CURLOPT_POSTFIELDS, serializedTransaction.c_str());
-      curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE,
-                       serializedTransaction.size());
-
-      res = curl_easy_perform(curl);
-      if (res != CURLE_OK) {
-        cerr << "curl_easy_perform() failed: " << curl_easy_strerror(res)
-             << endl;
-        result = "curl_easy_perform() failed";
-      } else {
-        result = "Transaction successfully sent to REST API.";
-      }
-      curl_easy_cleanup(curl);
-      curl_slist_free_all(headers);
-    }
-    curl_global_cleanup();
-    return result;
-  }
+ 
   std::string computeImageHash(const std::string& imagePath) {
     std::ifstream file(imagePath, std::ios::binary);
     if (!file) {
@@ -118,46 +82,9 @@ class NFTClient {
     return node;
   }
 
-  string getValue(const string& key) {
-    string keyHash = computeHash(key);
-    Node node = getNode(keyHash);
-    return node.value;
-  }
 
-  Node getNode(const string& key) {
-    string data;
-    Node node = {"", "", {}};
-    rocksdb::Status status = db->Get(rocksdb::ReadOptions(), key, &data);
-    if (status.ok()) return deserializeNode(data);
-    return node;
-  }
-
-  string processCommand(const vector<string>& commands) {
-    if (commands.size() < 2 || commands.size() > 4) {
-      return "Error: Number of arguments wrong";
-    }
-
+  transaction::Transaction processCommand(const vector<string>& commands) {
     string verb = commands[0];
-
-    if (verb == "get") {
-      string owner = commands[1];
-      string value = getValue(owner);  // Lookup by owner
-
-      if (value.empty()) {
-        return "No NFTs found for owner: " + owner;
-      }
-
-      try {
-        json nftList = json::parse(value);
-        cout << "NFTs owned by " << owner << ":\n";
-        for (const auto& hash : nftList) {
-          cout << "  - " << hash << endl;
-        }
-        return "Listed " + to_string(nftList.size()) + " NFTs.";
-      } catch (...) {
-        return "Error: Failed to parse NFT list for owner: " + owner;
-      }
-    }
 
     // Prepare transaction for create or transfer
     transactionHeader.set_family_name("nft");
@@ -177,11 +104,7 @@ class NFTClient {
 
     } else if (verb == "transfer") {
       std::string addr3 = "nft" + commands[3];
-      if (commands.size() != 4)
-        return "Error: transfer requires 4 arguments: transfer <client_id> "
-               "<image_path> <new_owner_id>";
-
-      // Compute hash from image path
+            // Compute hash from image path
       string imagePath = commands[2];
       transactionHeader.add_inputs(addr1);
       transactionHeader.add_outputs(addr1);
@@ -194,27 +117,19 @@ class NFTClient {
                 commands[3] + "\"}";
 
     } else {
-      return "Error: Invalid command.\n Available commands:\n"
-             "  create <client_id> <image_path>\n"
-             "  transfer <client_id> <image_path> <new_owner_id>\n"
-             "  get  <image_path>";
+      std::cerr << "transaction not found";
     }
 
     transaction.set_payload(payload);
 
     string serializedHeader;
     if (!transactionHeader.SerializeToString(&serializedHeader)) {
-      return "Failed to serialize TransactionHeader";
+      std::cerr << "transaction not found";
     }
 
     transaction.set_header(serializedHeader);
     transaction.add_dependencies("");
 
-    string serializedTransaction;
-    if (!transaction.SerializeToString(&serializedTransaction)) {
-      return "Failed to serialize Transaction";
-    }
-
-    return sendTransactionToRestAPI(serializedTransaction);
+    return transaction;
   }
 };

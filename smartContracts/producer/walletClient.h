@@ -23,51 +23,6 @@ class WalletClient {
   };
 
  public:
-  rocksdb::DB* db;
-  rocksdb::Options options;
-  rocksdb::Status status =
-      rocksdb::DB::OpenForReadOnly(options, "globalState", &db);
-
-  // Function to send the serialized transaction to the REST API using libcurl
-  string sendTransactionToRestAPI(const std::string& serializedTransaction) {
-    CURL* curl;
-    CURLcode res;
-    string result;
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-    curl = curl_easy_init();
-    if (curl) {
-      struct curl_slist* headers = nullptr;
-      headers =
-          curl_slist_append(headers, "Content-Type:application/octet-stream");
-
-      // Set the URL for the REST API endpoint
-      curl_easy_setopt(curl, CURLOPT_URL,
-                       "http://localhost:18080/api/transaction");
-
-      // Set the HTTP headers
-      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-      // Set the POST data
-      curl_easy_setopt(curl, CURLOPT_POSTFIELDS, serializedTransaction.c_str());
-      curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE,
-                       serializedTransaction.size());
-
-      // Perform the request, res will get the return code
-      res = curl_easy_perform(curl);
-      if (res != CURLE_OK) {
-        std::cerr << "curl_easy_perform() failed: " << curl_easy_strerror(res)
-                  << std::endl;
-        result = "curl_easy_perform() failed";
-      } else {
-        result = "Transaction successfully sent to REST API.";
-      }
-      // Clean up
-      curl_easy_cleanup(curl);
-      curl_slist_free_all(headers);
-    }
-    curl_global_cleanup();
-    return result;
-  }
   string computeHash(const string& input) {
     EVP_MD_CTX* mdctx;
     unsigned char hash[EVP_MAX_MD_SIZE];
@@ -109,25 +64,10 @@ class WalletClient {
     if (pos < data.size()) node.children.push_back(data.substr(pos));
     return node;
   }
-  string getValue(const string& key) {
-    string keyHash = computeHash(key);
-    Node node = getNode(keyHash);
-    return node.value;
-  }
-  Node getNode(const string& key) {
-    string data;
-    Node node = {"", "", {}};
-    rocksdb::Status status = db->Get(rocksdb::ReadOptions(), key, &data);
-    if (status.ok()) return deserializeNode(data);
-    return node;
-  }
-  // Modify this function to accept the command as a single string
-  string processCommand(const std::vector<std::string>& commands) {
-    // Validate the number of arguments
-    if (commands.size() < 3 || commands.size() > 6) {
-      return "Error: Number of arguments wrong";
-    }
 
+  // Modify this function to accept the command as a single string
+  transaction::Transaction processCommand(
+      const std::vector<std::string>& commands) {
     // Prepare transaction header
     transactionHeader.set_family_name("wallet");
     transactionHeader.set_client_id(commands[1]);
@@ -157,36 +97,21 @@ class WalletClient {
       transaction.set_payload("{\"Verb\": \"transfer\", \"Name1\": \"" + addr1 +
                               "\", \"Name2\": \"" + addr2 +
                               "\", \"Value\": \"" + commands[5] + "\"}");
-    } else if (command == "balance") {
-      std::string balance = getValue(addr1);
-      if (balance.empty()) balance = "0";
-      cout << "The balance of the account is " << balance << endl;
-      return balance;
     } else {
-      return "Error: Invalid command.\n Available commands:\n"
-             "  deposit <client_id> <key> <amount>\n"
-             "  withdraw <client_id> <key> <amount>\n"
-             "  transfer <sender_id> <sender_key> <receiver_id> <receiver_key> "
-             "<amount>\n"
-             "  balance <client_id> <key>";
+      transaction.set_payload("{\"Verb\": \"empty\"}");
     }
 
     // Serialize the transaction header
-    string serializedHeader;
+    std::string serializedHeader;
     if (!transactionHeader.SerializeToString(&serializedHeader)) {
-      return "Failed to serialize TransactionHeader";
+      cerr << "Failed to serialize transaction header" << endl;
+      throw std::runtime_error("Transaction header serialization failed");
     }
 
     transaction.set_header(serializedHeader);
     transaction.add_dependencies("");
 
-    // Serialize the transaction
-    std::string serializedTransaction;
-    if (!transaction.SerializeToString(&serializedTransaction)) {
-      return "Failed to serialize Transaction";
-    }
-
     // Send the serialized transaction to the REST API
-    return sendTransactionToRestAPI(serializedTransaction);
+    return transaction;
   }
 };

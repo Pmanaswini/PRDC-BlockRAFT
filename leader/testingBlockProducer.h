@@ -17,7 +17,7 @@
 #include "../merkleTree/globalState.h"
 #include "block.pb.h"
 #include "transaction.pb.h"
-#include "walletClient.h"
+
 
 class TestBlockProducer {
  public:

@@ -1,6 +1,6 @@
 {
-  "threadCount": 4,
-  "txnCount": 10,
+  "threadCount": 8,
+  "txnCount": 10000,
   "blocks": 1,
   "scheduler": "parallel",
   "mode": "production"

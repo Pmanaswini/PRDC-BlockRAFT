@@ -2,6 +2,9 @@
 #include <boost/log/trivial.hpp>
 #include <boost/log/utility/setup/common_attributes.hpp>
 #include <boost/log/utility/setup/file.hpp>
+#include <boost/log/core.hpp>
+#include <boost/log/trivial.hpp>
+#include <boost/log/expressions.hpp>
 #include <chrono>
 #include <etcd/Client.hpp>
 #include <etcd/KeepAlive.hpp>
@@ -274,11 +277,11 @@ void saveData(const std::string& path, int clusterSize) {
     if (count % 2 == 0) {
       BOOST_LOG_TRIVIAL(info) << "Setup File is running (even count)." << count;
       latestBlock =
-      producer.produce(db, txnCount, "../leader.testFile.txt");
+      producer.produce(db, txnCount, "../leader/testFile.txt");
     } else {
-      BOOST_LOG_TRIVIAL(info) << "Setup File is running (odd count)." << count;
+      BOOST_LOG_TRIVIAL(info) << "Test File is running (odd count)." << count;
       latestBlock =
-      producer.produce(db, txnCount, "../leader.testFile.txt");
+      producer.produce(db, txnCount, "../leader/testFile.txt");
     }
     if (latestBlock.transactions_size() == 0) {
       BOOST_LOG_TRIVIAL(warning) << "Empty block encountered.";
