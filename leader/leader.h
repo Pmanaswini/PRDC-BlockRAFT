@@ -18,6 +18,7 @@
 #include "../blocksDB/blocksDB.h"
 #include "../dagModule/DAGmodule.h"
 #include "../leader/etcdGlobals.h"
+#include "../leader/testingBlockProducer.h"
 #include "../merkleTree/globalState.h"
 
 string etcdPort = "http://127.0.0.1:2379";
@@ -266,17 +267,18 @@ void saveData(const std::string& path, int clusterSize) {
     thread componentsMonitor;
     BlockHeader header;
     Block latestBlock;
+    TestBlockProducer producer;
 
     // Check if block is available from network
     auto start = std::chrono::high_resolution_clock::now();
     if (count % 2 == 0) {
       BOOST_LOG_TRIVIAL(info) << "Setup File is running (even count)." << count;
       latestBlock =
-          blockProducer(db, txnCount, "localhost:19092", "transaction_pool");
+      producer.produce(db, txnCount, "../leader.testFile.txt");
     } else {
       BOOST_LOG_TRIVIAL(info) << "Setup File is running (odd count)." << count;
       latestBlock =
-          blockProducer(db, txnCount, "localhost:19092", "transaction_pool");
+      producer.produce(db, txnCount, "../leader.testFile.txt");
     }
     if (latestBlock.transactions_size() == 0) {
       BOOST_LOG_TRIVIAL(warning) << "Empty block encountered.";
