@@ -22,6 +22,9 @@ string raftTerm;
 
 atomic<bool> isLeader = false, etcdHealth = true, redpandaHealth = true;
 void initFileLogging() {
+  boost::log::core::get()->set_filter(
+    boost::log::trivial::severity >= boost::log::trivial::info
+);
   boost::log::add_file_log(
       boost::log::keywords::file_name = "../experiment.log",
       boost::log::keywords::auto_flush = true,
@@ -70,12 +73,12 @@ bool isEtcdClusterHealthy(const std::string &output, int memCount) {
   bool isHealthy = (failedNodes <= std::floor((memCount) / 3));
 
   if (!isHealthy) {
-    BOOST_LOG_TRIVIAL(error)
-        << "[ETCD] Cluster health check failed. Healthy nodes: " << healthyCount
-        << ", Total members: " << memCount;
+    // BOOST_LOG_TRIVIAL(error)
+    //     << "[ETCD] Cluster health check failed. Healthy nodes: " << healthyCount
+    //     << ", Total members: " << memCount;
 
     for (const auto &node : unhealthyNodes) {
-      BOOST_LOG_TRIVIAL(warning) << "[ETCD] Unhealthy node: " << node;
+      // BOOST_LOG_TRIVIAL(warning) << "[ETCD] Unhealthy node: " << node;
     }
   }
 
@@ -211,8 +214,8 @@ int main() {
         follower f;
         std::string leader_id = f.getLeaderID();  // fetch initial leader
         if (leader_id.empty()) {
-          BOOST_LOG_TRIVIAL(warning)
-              << "Leader ID is empty. Skipping block processing.";
+          // BOOST_LOG_TRIVIAL(warning)
+          //     << "Leader ID is empty. Skipping block processing.";
           continue;  // Skip this iteration if no leader is present.
         }
 
@@ -236,8 +239,8 @@ int main() {
                                                 threadCount, clusterSize);
 
           if (leaderCrashed.load()) {
-            BOOST_LOG_TRIVIAL(warning)
-                << "Breaking DAG execution due to leader crash.";
+            // BOOST_LOG_TRIVIAL(warning)
+            //     << "Breaking DAG execution due to leader crash.";
             continue;  // restart the main loop
           }
 
@@ -246,7 +249,7 @@ int main() {
                                     serializedBlock);
           }
         } else {
-          BOOST_LOG_TRIVIAL(info) << "No blocks found to execute as follower.";
+          // BOOST_LOG_TRIVIAL(info) << "No blocks found to execute as follower.";
         }
       }
       BOOST_LOG_TRIVIAL(info) << "The block was successfully executed.";

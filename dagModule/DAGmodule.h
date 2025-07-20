@@ -1,5 +1,6 @@
 #pragma once
 #include <pthread.h>
+#include <numeric>
 
 #include <atomic>
 #include <cmath>
@@ -130,23 +131,67 @@ class DAGmodule {
 
   components::componentsTable connectedComponents() {
     int n = adjacencyMatrix.size();
-    int totalComponents = 0;
-    vector<bool> visited(n, false);
-    string output;
-
-    for (int i = 0; i < n; i++) {
-      if (!visited[i]) {
-        auto* component = cTable.add_componentslist();
-        // Print all reachable vertices from v
-        DFSUtil(i, visited, component);
-        component->set_compid(totalComponents);
-        totalComponents++;
+    components::componentsTable cTable;
+  
+    // DSU data structures
+    std::vector<int> parent(n), rank(n, 0);
+    std::iota(parent.begin(), parent.end(), 0);  // initialize parent[i] = i
+  
+    // DSU Find with path compression
+    std::function<int(int)> find = [&](int x) {
+      if (parent[x] != x)
+        parent[x] = find(parent[x]);
+      return parent[x];
+    };
+  
+    // DSU Union with union by rank
+    auto unite = [&](int x, int y) {
+      int rootX = find(x);
+      int rootY = find(y);
+      if (rootX == rootY) return;
+      if (rank[rootX] < rank[rootY]) parent[rootX] = rootY;
+      else if (rank[rootX] > rank[rootY]) parent[rootY] = rootX;
+      else {
+        parent[rootY] = rootX;
+        rank[rootX]++;
+      }
+    };
+  
+    // Treat graph as undirected for weak components
+    for (int i = 0; i < n; ++i) {
+      for (int j = i + 1; j < n; ++j) {
+        if (adjacencyMatrix[i][j] || adjacencyMatrix[j][i]) {
+          unite(i, j);
+        }
       }
     }
-    cTable.set_totalcomponents(totalComponents);
-    cout << "total components: " << totalComponents << endl;
+  
+    // Group nodes by component root
+    std::unordered_map<int, std::vector<int>> componentsMap;
+    for (int i = 0; i < n; ++i) {
+      int root = find(i);
+      componentsMap[root].push_back(i);
+    }
+  
+    // Populate protobuf componentsTable
+    int compID = 0;
+    for (const auto& [root, txnList] : componentsMap) {
+      auto* comp = cTable.add_componentslist();
+  
+      for (int txn : txnList) {
+        auto* txnID = comp->add_transactionlist();
+        txnID->set_id(txn);
+      }
+  
+      comp->set_compid(compID);
+      compID++;
+    }
+  
+    cTable.set_totalcomponents(compID);
+    std::cout << "Total components: " << compID << std::endl;
     return cTable;
   }
+  
 
   void printDAGState() const {
     cout << "Adjacency Matrix:\n";
@@ -248,7 +293,7 @@ class DAGmodule {
         var_zero = 0;
         if (inDegree[i].compare_exchange_strong(var_zero, -1)) {
           lastTxn.store(i);
-          cout << "selected " << i << endl;
+          // cout << "selected " << i << endl;
           return i;  // Return the index if transaction is found
         }
       }

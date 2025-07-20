@@ -2,6 +2,9 @@
 #include <boost/log/trivial.hpp>
 #include <boost/log/utility/setup/common_attributes.hpp>
 #include <boost/log/utility/setup/file.hpp>
+#include <boost/log/core.hpp>
+#include <boost/log/trivial.hpp>
+#include <boost/log/expressions.hpp>
 #include <chrono>
 #include <etcd/Client.hpp>
 #include <etcd/KeepAlive.hpp>
@@ -18,6 +21,7 @@
 #include "../blocksDB/blocksDB.h"
 #include "../dagModule/DAGmodule.h"
 #include "../leader/etcdGlobals.h"
+#include "../leader/testingBlockProducer.h"
 #include "../merkleTree/globalState.h"
 
 string etcdPort = "http://127.0.0.1:2379";
@@ -234,231 +238,211 @@ class leader {
 
     return updatedKeys;
   }
-  void saveData(const std::string& path, int clusterSize) {
+
+
+void saveData(const std::string& path, int clusterSize) {
     std::vector<std::thread> threads;
     GlobalState state;
     std::vector<std::string> results(clusterSize);
+
     for (int i = 0; i < clusterSize; ++i) {
-      threads.emplace_back(
-          [&, i]() { results[i] = fetchAndParseKeys(path, i, state); });
+        threads.emplace_back(
+            [&, i]() { results[i] = fetchAndParseKeys(path, i, state); });
     }
 
     for (auto& t : threads) {
-      t.join();
+        t.join();
     }
 
     std::string allUpdatedKeys;
     for (const auto& result : results) {
-      allUpdatedKeys += result;
+        allUpdatedKeys += result;
     }
 
+    // Update the global state tree
     state.updateTree(allUpdatedKeys);
+}
+
+bool leaderProtocol(string raftTerm, int txnCount, int thCount, string mode, int count) {
+  etcd::Response response;
+  std::string serializedBlock, serializedComp;
+  thread componentsMonitor;
+  BlockHeader header;
+  Block latestBlock;
+  TestBlockProducer producer;
+
+  // Timing points
+  auto start = std::chrono::high_resolution_clock::now();
+  auto blockC = start;
+  auto dagS = start;
+  auto dagC = start;
+  auto compC = start;
+  auto exeS = start;
+  auto exeE = start;
+  auto end = start;
+
+  bool DAG = false;
+
+  // Block generation
+  if (count % 2 == 0) {
+      BOOST_LOG_TRIVIAL(info) << "Setup File is running (even count)." << count;
+      latestBlock = producer.produce(db, txnCount, "../leader/setupFile.txt");
+  } else {
+      BOOST_LOG_TRIVIAL(info) << "Test File is running (odd count)." << count;
+      latestBlock = producer.produce(db, txnCount, "../leader/testFile.txt");
   }
 
-  bool leaderProtocol(string raftTerm, int txnCount, int thCount, string mode,
-                      int count) {
-    etcd::Response response;
-    std::string serializedBlock, serializedComp;
-    thread componentsMonitor;
-    BlockHeader header;
-    Block latestBlock;
+  blockC = std::chrono::high_resolution_clock::now();
 
-    // Check if block is available from network
-    auto start = std::chrono::high_resolution_clock::now();
-    if (count % 2 == 0) {
-      BOOST_LOG_TRIVIAL(info) << "Setup File is running (even count)." << count;
-      latestBlock =
-          blockProducer(db, txnCount, "localhost:19092", "transaction_pool");
-    } else {
-      BOOST_LOG_TRIVIAL(info) << "Setup File is running (odd count)." << count;
-      latestBlock =
-          blockProducer(db, txnCount, "localhost:19092", "transaction_pool");
-    }
-    if (latestBlock.transactions_size() == 0) {
+  if (latestBlock.transactions_size() == 0) {
       BOOST_LOG_TRIVIAL(warning) << "Empty block encountered.";
       return false;
-    }
+  }
 
-    if (!latestBlock.SerializeToString(&serializedBlock)) {
-      BOOST_LOG_TRIVIAL(error) << "Failed to serialize the block.";
-    }
+  std::string base_path, blockKey, compKey, runKey, commitKey;
 
-    string headerString = latestBlock.header();
-    if (!header.ParseFromString(headerString)) {
-      BOOST_LOG_TRIVIAL(error) << "Failed to read graph from file.";
+  std::thread t1([&]() {
+      if (!latestBlock.SerializeToString(&serializedBlock)) {
+          BOOST_LOG_TRIVIAL(error) << "Failed to serialize the block.";
+          return;
+      }
 
-      return false;
-    }
+      std::string headerString = latestBlock.header();
+      if (!header.ParseFromString(headerString)) {
+          BOOST_LOG_TRIVIAL(error) << "Failed to parse block header.";
+          return;
+      }
 
-    auto blockC = std::chrono::high_resolution_clock::now();
-    BOOST_LOG_TRIVIAL(info) << "New block number: " << header.block_num();
+      getEtcdMembers();
+      getActiveFollowers();
 
-    getEtcdMembers();
-    getActiveFollowers();
+      base_path = node_id + "/" + raftTerm + "/" + to_string(header.block_num());
+      blockKey = base_path + "/block";
+      compKey = base_path + "/components";
+      runKey = base_path + "/run";
+      commitKey = base_path + "/commit";
 
-    auto dagS = std::chrono::high_resolution_clock::now();
-    bool DAG = DAGObj.create(latestBlock, thCount);
-    txnCount = DAGObj.totalTxns;
-    BOOST_LOG_TRIVIAL(info) << "total transactions are " << txnCount;
-    auto dagC = std::chrono::high_resolution_clock::now();
-
-    table = DAGObj.connectedComponents();
-    auto compC = std::chrono::high_resolution_clock::now();
-
-    componentCount.store(table.componentslist_size(),
-                         std::memory_order_relaxed);
-
-    if (DAG) {
-      std::string base_path = node_id + string("/") + raftTerm + string("/") +
-                              to_string(header.block_num());
-      BOOST_LOG_TRIVIAL(info) << base_path << endl;
-      cout << base_path << endl;
-      std::string blockKey = base_path + "/block";
-      std::string compKey = base_path + "/components";
-      std::string runKey = base_path + "/run";
-      std::string commitKey = base_path + "/commit";
-
-      componentsMonitor = thread(&leader::monitorComponents, this,
-                                 compKey);  // Individual ETCD Write Timings
       auto etcd_block_start = std::chrono::high_resolution_clock::now();
       response = etcdClient.set(blockKey, serializedBlock).get();
       auto etcd_block_end = std::chrono::high_resolution_clock::now();
+
       BOOST_LOG_TRIVIAL(info)
           << "ETCD write (block): "
-          << std::chrono::duration_cast<std::chrono::milliseconds>(
-                 etcd_block_end - etcd_block_start)
-                 .count()
+          << std::chrono::duration_cast<std::chrono::milliseconds>(etcd_block_end - etcd_block_start).count()
           << " ms";
+          auto etcd_run_wait_start = std::chrono::high_resolution_clock::now();
+          response = etcdClient.set(runKey, "wait").get();
+          auto etcd_run_wait_end = std::chrono::high_resolution_clock::now();
+    
+          BOOST_LOG_TRIVIAL(info)
+              << "ETCD write (run=wait): "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(etcd_run_wait_end - etcd_run_wait_start).count()
+              << " ms";
+    
+          auto etcd_commit0_start = std::chrono::high_resolution_clock::now();
+          response = etcdClient.set(commitKey, (mode == "validation") ? "1" : "0").get();
+          auto etcd_commit0_end = std::chrono::high_resolution_clock::now();
+    
+          BOOST_LOG_TRIVIAL(info)
+              << "ETCD write (commit=0/1): "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(etcd_commit0_end - etcd_commit0_start).count()
+              << " ms";
+    
+  });
 
-      auto etcd_run_wait_start = std::chrono::high_resolution_clock::now();
-      response = etcdClient.set(runKey, "wait").get();
-      auto etcd_run_wait_end = std::chrono::high_resolution_clock::now();
-      BOOST_LOG_TRIVIAL(info)
-          << "ETCD write (run=wait): "
-          << std::chrono::duration_cast<std::chrono::milliseconds>(
-                 etcd_run_wait_end - etcd_run_wait_start)
-                 .count()
-          << " ms" << std::endl;
+  std::thread t2([&]() {
+      dagS = std::chrono::high_resolution_clock::now();
+      DAG = DAGObj.create(latestBlock, thCount);
+      txnCount = DAGObj.totalTxns;
+      dagC = std::chrono::high_resolution_clock::now();
 
-      auto etcd_commit0_start = std::chrono::high_resolution_clock::now();
-      if (mode == "validation") {
-        response = etcdClient.set(commitKey, "1").get();
-      } else {
-        response = etcdClient.set(commitKey, "0").get();
-      }
-      auto etcd_commit0_end = std::chrono::high_resolution_clock::now();
-      BOOST_LOG_TRIVIAL(info)
-          << "ETCD write (commit=0): "
-          << std::chrono::duration_cast<std::chrono::milliseconds>(
-                 etcd_commit0_end - etcd_commit0_start)
-                 .count()
-          << " ms" << std::endl;
+      table = DAGObj.connectedComponents();
+      compC = std::chrono::high_resolution_clock::now();
 
-      if (!assignFollowers(compKey)) {
-        return false;
-      }
+      componentCount.store(table.componentslist_size(), std::memory_order_relaxed);
+  });
 
-      auto exeS = std::chrono::high_resolution_clock::now();
+  t1.join();
+  t2.join();
+
+  if (DAG) {
+      BOOST_LOG_TRIVIAL(info) << base_path;
+
+      componentsMonitor = std::thread(&leader::monitorComponents, this, compKey);
+
+
+      if (!assignFollowers(compKey)) return false;
+
+      exeS = std::chrono::high_resolution_clock::now();
 
       auto etcd_run_start_start = std::chrono::high_resolution_clock::now();
       response = etcdClient.set(runKey, "start").get();
       auto etcd_run_start_end = std::chrono::high_resolution_clock::now();
+
       BOOST_LOG_TRIVIAL(info)
           << "ETCD write (run=start): "
-          << std::chrono::duration_cast<std::chrono::milliseconds>(
-                 etcd_run_start_end - etcd_run_start_start)
-                 .count()
-          << " ms" << std::endl;
+          << std::chrono::duration_cast<std::chrono::milliseconds>(etcd_run_start_end - etcd_run_start_start).count()
+          << " ms";
+
       checkComponents(compKey + "/status", txnCount);
+
       auto etcd_run_finish_start = std::chrono::high_resolution_clock::now();
       response = etcdClient.set(runKey, "finish").get();
       auto etcd_run_finish_end = std::chrono::high_resolution_clock::now();
+
       BOOST_LOG_TRIVIAL(info)
           << "ETCD write (run=finish): "
-          << std::chrono::duration_cast<std::chrono::milliseconds>(
-                 etcd_run_finish_end - etcd_run_finish_start)
-                 .count()
-          << " ms" << std::endl;
+          << std::chrono::duration_cast<std::chrono::milliseconds>(etcd_run_finish_end - etcd_run_finish_start).count()
+          << " ms";
 
       auto etcd_commit1_start = std::chrono::high_resolution_clock::now();
       response = etcdClient.set(commitKey, "1").get();
       auto etcd_commit1_end = std::chrono::high_resolution_clock::now();
+
       BOOST_LOG_TRIVIAL(info)
           << "ETCD write (commit=1): "
-          << std::chrono::duration_cast<std::chrono::milliseconds>(
-                 etcd_commit1_end - etcd_commit1_start)
-                 .count()
-          << " ms" << std::endl;
+          << std::chrono::duration_cast<std::chrono::milliseconds>(etcd_commit1_end - etcd_commit1_start).count()
+          << " ms";
 
-      auto exeE = std::chrono::high_resolution_clock::now();
+      exeE = std::chrono::high_resolution_clock::now();
 
       saveData(base_path, memberList.size());
-
       db.storeBlock("B" + to_string(header.block_num()), serializedBlock);
 
-      auto end = std::chrono::high_resolution_clock::now();
+      end = std::chrono::high_resolution_clock::now();
 
-      auto duration1 =
-          std::chrono::duration_cast<std::chrono::milliseconds>(blockC - start)
-              .count();
-      BOOST_LOG_TRIVIAL(info)
-          << "Time for block production: " << duration1 << " ms";
+      // Correct timing logs
+      BOOST_LOG_TRIVIAL(info) << "Time for block production: " 
+          << std::chrono::duration_cast<std::chrono::milliseconds>(blockC - start).count() << " ms";
+      BOOST_LOG_TRIVIAL(info) << "Time for DAG creation: " 
+          << std::chrono::duration_cast<std::chrono::milliseconds>(dagC - dagS).count() << " ms";
+      BOOST_LOG_TRIVIAL(info) << "Time for component detectin: " 
+          << std::chrono::duration_cast<std::chrono::milliseconds>(compC - dagC).count() << " ms";
+      BOOST_LOG_TRIVIAL(info) << "Time for assigning followers: " 
+          << std::chrono::duration_cast<std::chrono::milliseconds>(exeS - compC).count() << " ms";
+      BOOST_LOG_TRIVIAL(info) << "Time for total execution: " 
+          << std::chrono::duration_cast<std::chrono::milliseconds>(exeE - exeS).count() << " ms";
+      BOOST_LOG_TRIVIAL(info) << "Time for storing the values: " 
+          << std::chrono::duration_cast<std::chrono::milliseconds>(end - exeE).count() << " ms";
+      BOOST_LOG_TRIVIAL(info) << "Time for leader protocol: " 
+          << std::chrono::duration_cast<std::chrono::milliseconds>(end - blockC).count() << " ms";
 
-      auto duration7 =
-          std::chrono::duration_cast<std::chrono::milliseconds>(dagS - blockC)
-              .count();
-      BOOST_LOG_TRIVIAL(info)
-          << "Time for work assigning: " << duration7 << " ms";
-
-      auto duration2 =
-          std::chrono::duration_cast<std::chrono::milliseconds>(dagC - dagS)
-              .count();
-      BOOST_LOG_TRIVIAL(info)
-          << "Time for DAG creation: " << duration2 << " ms";
-
-      auto duration8 =
-          std::chrono::duration_cast<std::chrono::milliseconds>(compC - dagC)
-              .count();
-      BOOST_LOG_TRIVIAL(info)
-          << "Time for storing data: " << duration8 << " ms";
-
-      auto duration3 =
-          std::chrono::duration_cast<std::chrono::milliseconds>(exeS - compC)
-              .count();
-      BOOST_LOG_TRIVIAL(info)
-          << "Time for component creation: " << duration3 << " ms";
-
-      auto duration4 =
-          std::chrono::duration_cast<std::chrono::milliseconds>(exeE - exeS)
-              .count();
-      BOOST_LOG_TRIVIAL(info)
-          << "Time for total execution: " << duration4 << " ms";
-
-      auto duration5 =
-          std::chrono::duration_cast<std::chrono::milliseconds>(end - exeE)
-              .count();
-      BOOST_LOG_TRIVIAL(info)
-          << "Time for storing the values: " << duration5 << " ms";
-
-      auto duration6 =
-          std::chrono::duration_cast<std::chrono::milliseconds>(end - blockC)
-              .count();
-      BOOST_LOG_TRIVIAL(info)
-          << "Time for leader protocol: " << duration6 << " ms";
       componentsMonitor.join();
       DAGObj.dagClean();
       componentCount.store(0, std::memory_order_relaxed);
       table.Clear();
       healthyMemberIds.clear();
       memberList.clear();
+
       if (count % 2 == 0) {
-        GlobalState state;
-        state.resetTree();
+          GlobalState state;
+          state.resetTree();
       }
 
       return true;
-    }
-
-    return false;
   }
+
+  return false;
+}
+
 };

@@ -29,6 +29,7 @@ set(PROTO_FILES
     ./protos/block.proto 
     ./protos/transaction.proto
     ./protos/components.proto
+    ./protos/addressList.proto
 )
 
 # Generate C++ source and header files from protobuf

@@ -18,7 +18,7 @@
 #include "components.pb.h"
 #include "matrix.pb.h"
 #include "transaction.pb.h"
-
+#include "addressList.pb.h"
 using namespace std;
 
 class scheduler {
@@ -54,25 +54,29 @@ class scheduler {
     return sum;
   }
   // Serializes and stores shared map state to etcd
-  void dataStore(string path) {
-    std::ostringstream oss;
+  void dataStore(const std::string& path) {
+    addressList::AddressValueList protoList;
 
+    // Build the protobuf message from the map
     for (const auto& kv : myMap) {
-      oss << kv.first << "=" << kv.second << ";";
+        addressList::AddressValue* pair = protoList.add_pairs();
+        pair->set_address(kv.first);
+        pair->set_value(kv.second);
     }
 
-    std::string stateData = oss.str();
-
-    // Optional: trim trailing semicolon if needed
-    if (!stateData.empty() && stateData.back() == ';') {
-      stateData.pop_back();
+    // Serialize to string
+    std::string serializedData;
+    if (!protoList.SerializeToString(&serializedData)) {
+        std::cerr << "Failed to serialize AddressValueList!" << std::endl;
+        return;
     }
-    cout << "path of store DATA is " << path << endl;
-    cout << "size of store DATA is " << stateData.size() << endl;
 
-    // Store in etcd
-    etcdClient.put(path + "/" + node_id, stateData).get();
-  }
+    std::cout << "Path of store DATA is " << path << std::endl;
+    std::cout << "Size of serialized proto DATA is " << serializedData.size() << std::endl;
+
+    // Store in etcd (binary-safe)
+    etcdClient.put(path + "/" + node_id, serializedData).get();
+}
   // Parses and loads DAG matrix from serialized protobuf input
   void extractDAG(string matrixData) {
     // Deserialize the Protobuf message

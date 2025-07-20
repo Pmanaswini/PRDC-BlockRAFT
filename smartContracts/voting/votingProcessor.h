@@ -40,7 +40,7 @@ class VotingProcessor {
   bool registerVoter(const std::string& name) {
     tbb::concurrent_hash_map<std::string, std::string>::accessor acc;
     if (myMap.insert(acc, name)) {
-      acc->second = "1";  // One vote token by default
+      acc->second = "10000";  // One vote token by default
       return true;
     }
     return false;
