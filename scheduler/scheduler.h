@@ -53,6 +53,25 @@ class scheduler {
 
     return sum;
   }
+
+void reset() {
+  // Clear component tracker
+  processed_components.clear();
+
+  // Clear transactions
+  transactions.clear();
+
+  // Reset atomics
+  compCount.store(0);
+  flag.store(true);
+  completeFlag.store(false);
+  updateFlag.store(false);
+
+  // Clear the concurrent map
+  myMap.clear();  // TBB's concurrent_hash_map supports clear()
+}
+
+
   // Serializes and stores shared map state to etcd
   void dataStore(const std::string& path) {
     addressList::AddressValueList protoList;
@@ -75,7 +94,7 @@ class scheduler {
     std::cout << "Size of serialized proto DATA is " << serializedData.size() << std::endl;
 
     // Store in etcd (binary-safe)
-    etcdClient.put(path + "/" + node_id, serializedData).get();
+    etcdClient.put(path, serializedData).get();
 }
   // Parses and loads DAG matrix from serialized protobuf input
   void extractDAG(string matrixData) {
@@ -173,7 +192,7 @@ class scheduler {
 
     while ((!completeFlag.load()) && flag.load()) {
       if (dag.completedTxns == dag.totalTxns && updateFlag) {
-        dataStore(leader_id + "/" + term_no + "/" + std::to_string(block_num) +
+        dataStore(leader_id + "/" + term_no + "/" + std::to_string(block_num) +"/"+node_id+
                   "/data");
         std::string comp_key = leader_id + "/" + term_no + "/" +
                                std::to_string(block_num) +
@@ -267,6 +286,14 @@ class scheduler {
     completeFlag.store(false);
     cout << "Transactions to execute is " << dag.totalTxns - dag.completedTxns
          << endl;
+    if(dag.totalTxns - dag.completedTxns <= 0) {
+      cout << "No transactions to execute" << endl;
+      std::string comp_key = leader_id + "/" + term_no + "/" +
+                               std::to_string(block_num) +
+                               "/components/status" + "/" + node_id;
+        auto put_response =
+            etcdClient.put(comp_key, "0").get();
+    }
     for (int i = 0; i < threadCount; i++) {
       threads[i] = thread(&scheduler::executeTxns, this, i, leader_id, term_no,
                           block_num);

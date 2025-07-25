@@ -193,8 +193,9 @@ int main() {
   std::string schedulerMode = configJson["scheduler"];
   std::string executionMode = configJson["mode"];
   executeCommand("etcdctl del \"\" --prefix");
+  int count=0;
 
-  while (etcdHealth.load() && redpandaHealth.load() && blocksCount) {
+  while (etcdHealth.load() && redpandaHealth.load() && count< blocksCount) {
     if (leaderObj.nodeDetails()) {
       if (findLeader()) {
         if (!LLease.load()) {
@@ -204,11 +205,8 @@ int main() {
         leader::stopMonitor.store(false);
 
         bool status = leaderObj.leaderProtocol(raftTerm, txnCount, threadCount,
-                                               executionMode, blocksCount);
-
-        if (status) {
-          blocksCount--;
-        }
+                                               executionMode, count);
+          count++;
       } else {
         // Follower branch:
         follower f;

@@ -16,6 +16,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include "addressList.pb.h"
 
 #include "../blockProducer/blockProducer.h"
 #include "../blocksDB/blocksDB.h"
@@ -208,36 +209,38 @@ class leader {
     return false;
   }
 
-  std::string fetchAndParseKeys(const std::string& path, int i,
-                                GlobalState& state) {
-    std::string etcdKey = path + "/data/s" + std::to_string(i);
-    etcd::Response response = etcdClient.get(etcdKey).get();
+  std::string fetchAndParseKeys(const std::string& path, int nodeIndex, GlobalState& state) {
+    std::string fullPath = path + "/s" + std::to_string(nodeIndex)+"/data";
+    cout << "Fetching data at path: " << fullPath << std::endl;
 
+    // Fetch the data from etcd
+    auto response = etcdClient.get(fullPath).get();
     if (!response.is_ok()) {
-      BOOST_LOG_TRIVIAL(error)
-          << "Failed to fetch data from etcd at: " << etcdKey;
-
-      return "";
+        std::cerr << "Failed to fetch from etcd for node " << nodeIndex << std::endl;
+        return "";
     }
 
-    std::string data = response.value().as_string();
-    std::istringstream ss(data);
-    std::string pair;
+    std::string value = response.value().as_string();
+
+    // Parse the protobuf
+    addressList::AddressValueList protoList;
+    if (!protoList.ParseFromString(value)) {
+        std::cerr << "Failed to parse protobuf for node " << nodeIndex << std::endl;
+        return "";
+    }
+
+    // Insert into state and collect updated keys
     std::string updatedKeys;
+    for (const auto& pair : protoList.pairs()) {
+        const std::string& key = pair.address();
+        const std::string& val = pair.value();
 
-    while (std::getline(ss, pair, ';')) {
-      auto delimiterPos = pair.find('=');
-      if (delimiterPos == std::string::npos) continue;
-
-      std::string key = pair.substr(0, delimiterPos);
-      std::string value = pair.substr(delimiterPos + 1);
-      state.insert(key, value);
-      // Value can be parsed too if needed, but we're just collecting keys
-      updatedKeys += key + " ";
+        state.insert(key, val);
+        updatedKeys += key + " ";
     }
 
     return updatedKeys;
-  }
+}
 
 
 void saveData(const std::string& path, int clusterSize) {
@@ -354,6 +357,7 @@ bool leaderProtocol(string raftTerm, int txnCount, int thCount, string mode, int
       dagS = std::chrono::high_resolution_clock::now();
       DAG = DAGObj.create(latestBlock, thCount);
       txnCount = DAGObj.totalTxns;
+      cout<< "Total transactions in DAG: " << txnCount << endl;
       dagC = std::chrono::high_resolution_clock::now();
 
       table = DAGObj.connectedComponents();

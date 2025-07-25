@@ -29,12 +29,10 @@ class follower {
  public:
   string Leader;
   GlobalState state;
-  GlobalState tmp;
+  // GlobalState tmp;
   scheduler Scheduler;
 
-  follower() : tmp("globalState_tmp"), Scheduler(tmp) {
-    // Duplicate the state into tmp DB
-    state.duplicateState("globalState_tmp");
+  follower() : Scheduler(state) {
   }
   atomic<int> stopWatcher;
 
@@ -296,6 +294,7 @@ class follower {
 
     success = Scheduler.scheduleTxns(leader_id, term_no, block_num, thCount);
     if (success) {
+      return success;
     } else {
       BOOST_LOG_TRIVIAL(error)
           << "Transaction execution failed for block " << block_num << ".";
@@ -395,17 +394,16 @@ class follower {
                                     .get(leader_id + "/" + term_no + "/" +
                                          std::to_string(block_num) + "/commit")
                                     .get();
-      if (!flag) {
+      
+      saveData(leader_id + "/" + term_no + "/" + std::to_string(block_num),
+                 clusterSize);
+                 Scheduler.reset();  // Reset scheduler state after execution
+
+                                    if (!flag) {
         BOOST_LOG_TRIVIAL(error) << "Execution failed";
         return serializedBlock;
       }
-      if (flag && response.value().as_string() == "1") {
-        saveData(leader_id + "/" + term_no + "/" + std::to_string(block_num),
-                 clusterSize);
-
-      } else {
-        state.resetTree();
-      }
+      
 
       // db.storeBlock("B" + to_string(header.block_num()), serializedBlock);
       stopWatcher.store(true);
@@ -459,58 +457,62 @@ class follower {
     }
   }
 
-  std::string fetchAndParseKeys(const std::string& path, int i,
-                                GlobalState& tmp) {
-    std::string etcdKey = path + "/data/s" + std::to_string(i);
-    etcd::Response response = etcdClient.get(etcdKey).get();
+  std::string fetchAndParseKeys(const std::string& path, int nodeIndex, GlobalState& state) {
+    cerr << "Fetching data at path: " << path << std::endl<<std::flush;
 
-    if (!response.is_ok()) {
-      BOOST_LOG_TRIVIAL(error)
-          << "Failed to fetch data from etcd at: " << etcdKey;
-      return "";
+    std::string fullPath = path + "/s" + std::to_string(nodeIndex)+"/data";
+    cout << "Fetching data at path: " << fullPath << std::endl<<std::flush;
+    // Fetch the data from etcd
+    auto response = etcdClient.get(fullPath).get();
+    // if (!response.is_ok()) {
+    //     std::cerr << "Failed to fetch from etcd for node " << nodeIndex << std::endl;
+    //     return "";
+    // }
+
+    std::string value = response.value().as_string();
+
+    // Parse the protobuf
+    addressList::AddressValueList protoList;
+    if (!protoList.ParseFromString(value)) {
+        std::cerr << "Failed to parse protobuf for node " << nodeIndex << std::endl;
+        return "";
     }
 
-    std::string data = response.value().as_string();
-    std::istringstream ss(data);
-    std::string pair;
+    // Insert into state and collect updated keys
     std::string updatedKeys;
+    for (const auto& pair : protoList.pairs()) {
+        const std::string& key = pair.address();
+        const std::string& val = pair.value();
 
-    while (std::getline(ss, pair, ';')) {
-      auto delimiterPos = pair.find('=');
-      if (delimiterPos == std::string::npos) continue;
-
-      std::string key = pair.substr(0, delimiterPos);
-      std::string value = pair.substr(delimiterPos + 1);
-      tmp.insert(key, value);
-      // Value can be parsed too if needed, but we're just collecting keys
-      updatedKeys += key + " ";
+        state.insert(key, val);
+        updatedKeys += key + " ";
     }
 
     return updatedKeys;
-  }
-
+}
 
 void saveData(const std::string& path, int clusterSize) {
     std::vector<std::thread> threads;
-    GlobalState state;
     std::vector<std::string> results(clusterSize);
-
+cout<< "Saving data from path: " << path << std::endl;
+  cout << "Cluster size: " << clusterSize << std::endl;
+  
     for (int i = 0; i < clusterSize; ++i) {
-        threads.emplace_back(
-            [&, i]() { results[i] = fetchAndParseKeys(path, i, state); });
+        threads.emplace_back([&, i]() {
+        results[i] = fetchAndParseKeys(path, i, state);
+});
+
     }
 
     for (auto& t : threads) {
         t.join();
     }
-
-    std::string allUpdatedKeys;
+    std::string allUpdatedKeys="";
     for (const auto& result : results) {
-        allUpdatedKeys += result;
+        allUpdatedKeys += result + " ";
     }
-    tmp.updateTree(allUpdatedKeys);
-    state.replaceWith("globalState_tmp");
-    rocksdb::DestroyDB("globalState_tmp", rocksdb::Options());
-    std::filesystem::remove_all("globalState_tmp");
-  }
+
+    // Update the global state tree
+    state.updateTree(allUpdatedKeys);
+}
 };
