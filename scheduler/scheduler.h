@@ -60,6 +60,7 @@ void reset() {
 
   // Clear transactions
   transactions.clear();
+  dag.dagClean();
 
   // Reset atomics
   compCount.store(0);
@@ -207,6 +208,7 @@ void reset() {
         }
       }
       int txnId = dag.selectTxn();
+      cout<<"selected: "<<txnId<<endl;
       if (txnId != -1) {
         transaction::Transaction txn =
             transactions[txnId];  // Directly use txnId to get the transaction
@@ -294,6 +296,7 @@ void reset() {
         auto put_response =
             etcdClient.put(comp_key, "0").get();
     }
+    cout<<"threads got created"<<endl;
     for (int i = 0; i < threadCount; i++) {
       threads[i] = thread(&scheduler::executeTxns, this, i, leader_id, term_no,
                           block_num);
@@ -304,6 +307,8 @@ void reset() {
     for (int i = 0; i < threadCount; i++) {
       threads[i].join();  // Wait for all threads to finish
     }
+    
     return flag.load();
+    
   }
 };
